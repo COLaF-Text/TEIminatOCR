@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>YOLOv8 Object Detection</title>
+    <title>TEIminatOCR, an image to TEI full javascript application</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     <style>
       canvas {
           display:block;
@@ -14,21 +15,50 @@
     </style>
 </head>
 <body>
-    <input id="uploadInput" type="file"/>
-    <table style="min-height:100%; width: 100%;">
-      <tr>
-        <td width=800>
+    <div class="container-fluid">
+      <div class="row">
+        <div class="col-md-10 offset-md-1 mb-2 mt-2">
+          <div class="mb-2">
+            <h1>Welcome to the TEIminatOCR</h1>
+            <p>TEIminatOCR is an application that reuses object identification for segmenting and recognizing zones of texts, OCR using TesseractJS and the Segmonto ontology. Images that you will load will be first segmented through YOLO object detection, then OCRized. Bounding box of lines are then dispatched in each area and the TEI is produced for the output.</p>
+            <h3>Bibliography</h3>
+            <ul style="font-size:smaller;">
+              <li>
+                Jocher, G., Chaurasia, A., & Qiu, J. (2023). YOLO by Ultralytics (Version 8.0.0) [Computer software]. <a href="https://github.com/ultralytics/ultralytics">https://github.com/ultralytics/ultralytics</a>
+              </li>
+              <li>
+                Clérice, T. (2023). You Actually Look Twice At it (YALTAi): using an object detection approach instead of region segmentation within the Kraken engine. [Preprint] <a target="_blank" href="https://enc.hal.science/hal-03723208v2">⟨hal-03723208v2⟩</a>
+              </li>
+              <li>Pinche, A., Gabay, S., & Camps, J. B. (2022). SegmOnto: Vocabulaire contrôlé pour décrire les manuscrits et les imprimés. In Segmenter et annoter les images: déconstruire pour reconstruire. <i>1st International Workshop on Computational Paleography (IWCP@ICDAR 2021)</i>, Lausanne, Switzerland. <a href="https://hal.science/hal-03336528">⟨hal-03336528⟩</a></li>
+              <li>R. Smith. (2007). An Overview of the Tesseract OCR Engine. <i>Ninth International Conference on Document Analysis and Recognition (ICDAR 2007)</i>,, vol. 2, pp. 629–633. <a href="https://doi.org/10.1109/ICDAR.2007.4376991">10.1109/ICDAR.2007.4376991</a>.</li>
+              <li>
+                Wu, J. (2023). TesseractJS (Version 5.0.2) [Computer software]. <a href="https://github.com/naptha/tesseract.js">https://github.com/naptha/tesseract.js</a>
+              </li>
+            </ul>
+          </div>
+      <hr />
+          <div class="row">
+            <label for="inputEmail3" class="col-sm-4 text-end col-form-label">Image file to process</label>
+            <div class="col-sm-6 text-start">
+              <input type="file" class="form-control" id="uploadInput">
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-5 offset-md-1">
           <canvas></canvas>
-        </td>
-        <td>
+        </div>
+        <div class="col-md-5">
           <textarea id="te" style="min-height:400px; width: 100%;"></textarea>
-        </td>
-      </tr>
-    </table>
+        </div>
+      </div>
+    </div>
+
     <script>
       const IMG_WIDTH = 640, 
             IMG_HEIGHT = 640,
-            MIN_PROB = .5,
+            MIN_PROB = .2,
             OVERLAP = 0.3,
             OUT_SIZE = 8400; // Depends on your model (1, 23, 13125) is the output shape for us
 
@@ -71,7 +101,12 @@
        input.addEventListener("change",async(event) => {
            const out = await detect_objects_on_image(event.target.files[0]);
            textarea.value = dumpOuterHTML(out.xml);
-           draw_image_and_boxes(event.target.files[0],out.boxes);
+           console.log(out);
+           draw_image_and_boxes(
+            event.target.files[0],
+            out.boxes,
+            out.lines
+            );
        })
 
       /**
@@ -81,7 +116,7 @@
        * @param file Uploaded file object
        * @param boxes Array of bounding boxes in format [[x1,y1,x2,y2,object_type,probability],...]
        */
-      function draw_image_and_boxes(file,boxes) {
+      function draw_image_and_boxes(file,boxes, lines) {
           const img = new Image()
           img.src = URL.createObjectURL(file);
           img.onload = () => {
@@ -100,6 +135,12 @@
                   // ctx.fillRect(x1,y1,width+10,25);
                   // ctx.fillStyle = "#000000";
                   ctx.fillText(label, x1, y1+18);
+              });
+              lines.forEach(([x1,y1,x2,y2]) => {
+                  ctx.strokeRect(x1,y1,x2-x1,y2-y1);
+                  ctx.strokeStyle = "#000000";
+                  // ctx.fillRect(x1,y1,width+10,25);
+                  // ctx.fillStyle = "#000000";
               });
           }
       }
@@ -128,24 +169,57 @@
 
           // Boxes : x, y, x2, y2, type, prob
 
-          const xml = {
+          const xml = {};
 
-          };
           for (var i = 0; i < boxes.length; i++) {
             for (var j = 0; j < lines.length; j++) {
               bbox = lines[j].bbox;
               let center = computeBBoxCenter([bbox.x0, bbox.y0, bbox.x1, bbox.y1]);
               if (isPointInBBox(center, boxes[i].slice(0, 4))) {
-                console.log(boxes[i][4], i, lines[j].text);
                 if (!(i in xml)) {
-                  xml[i] = document.createElement("p");
+                  xml[i] = document.createElement(getTag(boxes[i][4]));
                 }
                 xml[i].innerHTML += "<lb/> " + lines[j].text.trim() + "\n";
               }
             }
           }
 
-          return {"boxes": boxes, "xml": xml};
+          return {
+            "boxes": boxes,
+            "xml": xml,
+            "lines": lines.map((el) => { 
+                  return [
+                    el.bbox.x0,
+                    el.bbox.y0,
+                    el.bbox.x1,
+                    el.bbox.y1
+                  ];
+              })
+          };
+      }
+
+      function getTag(zone) {
+        console.log(zone);
+        if (zone.startsWith("MainZone")) {
+          if (zone.endsWith("-P")) {
+            return "p";
+          } else if (zone.endsWith("-Head")) {
+            return "head";
+          } else if (zone.endsWith("-Lg")) {
+            return "lg";
+          } else if (zone.endsWith("-Sp")) {
+            return "sp";
+          } else if (zone.endsWith("-Entry")) {
+            return "entryFree";
+          } else if (zone.endsWith("-Other")) {
+            return "ab";
+          }
+        } else if (zone.startsWith("MarginTextZone")) {
+          return "note";
+        } else {
+          return "ab";
+        }
+
       }
 
       /**
@@ -284,9 +358,10 @@
 
       async function OCRize(img) {
         const worker = await Tesseract.createWorker('fra');
-        const { data: { lines } } = await worker.recognize(img);
+        const data = await worker.recognize(img);
         await worker.terminate();
-        return lines;
+        console.log(data);
+        return data.lines;
       };
     </script>
 </body>
