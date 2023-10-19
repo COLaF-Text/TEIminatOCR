@@ -205,7 +205,7 @@
               } else {
                   // If there is no intersection, create a new element and mark it as original.
                   let lastKey = getLastObjectKey(dispatchDict);
-                  if (!dispatchDict[lastKey].isOriginal) {
+                  if ((lastKey) && !(dispatchDict[lastKey].isOriginal)) {
                     dispatchDict[lastKey].elements.push(currentLine);
                   } else {
                     dispatchDict[currentLineBbox] = { elements: [currentLine], isOriginal: false, metadata: null};
