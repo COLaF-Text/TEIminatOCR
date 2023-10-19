@@ -37,10 +37,15 @@
             </ul>
           </div>
       <hr />
-          <div class="row">
+          <div class="row mb-2">
             <label for="inputEmail3" class="col-sm-4 text-end col-form-label">Image file to process</label>
             <div class="col-sm-6 text-start">
               <input type="file" class="form-control" id="uploadInput">
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-12 text-center">
+              <a class="btn btn-primary" id="button" href="#">Process</a>
             </div>
           </div>
         </div>
@@ -84,11 +89,6 @@
 
           return [centerX, centerY];
       }
-      function dumpOuterHTML(obj) {
-          const elements = Object.values(obj);
-          const outerHTMLArray = elements.map(element => element.outerHTML.split("<lb>").join("<lb />").replace(/<\/lb>/g, ''));
-          return outerHTMLArray.join('\n');
-      }
 
       /**
        * "Upload" button onClick handler: uploads selected image file
@@ -96,17 +96,20 @@
        * and draws them on top of image
        */
        const input = document.getElementById("uploadInput"),
-             textarea = document.getElementById("te");
+             textarea = document.getElementById("te"),
+             button = document.getElementById("button");
 
-       input.addEventListener("change",async(event) => {
-           const out = await detect_objects_on_image(event.target.files[0]);
-           textarea.value = dumpOuterHTML(out.xml);
-           console.log(out);
-           draw_image_and_boxes(
-            event.target.files[0],
+       button.addEventListener("click", async(event) => {
+          event.preventDefault();
+          button.innerText = "Be patient, it's coming";
+          const out = await detect_objects_on_image(input.files[0]);
+          textarea.value = out.xml.outerHTML.split("<lb>").join("<lb />").replace(/<\/lb>/g, '');
+          draw_image_and_boxes(
+            input.files[0],
             out.boxes,
             out.lines
-            );
+          );
+          button.innerText = "Process";
        })
 
       /**
@@ -121,29 +124,98 @@
           img.src = URL.createObjectURL(file);
           img.onload = () => {
               const canvas = document.querySelector("canvas");
-              canvas.width = img.width;
-              canvas.height = img.height;
+              const scale =  textarea.offsetWidth / img.width;
+              canvas.width = textarea.offsetWidth;
+              canvas.height = img.height * scale;
               const ctx = canvas.getContext("2d");
-              ctx.drawImage(img,0,0);
+              ctx.imageSmoothingEnabled = false;
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
               ctx.strokeStyle = "#00FF00";
-              ctx.lineWidth = 3;
+              ctx.lineWidth = 1;
               ctx.font = "18px serif";
               boxes.forEach(([x1,y1,x2,y2,label]) => {
-                  ctx.strokeRect(x1,y1,x2-x1,y2-y1);
+                  ctx.strokeRect(x1*scale,y1*scale,(x2-x1)*scale,(y2-y1)*scale);
                   ctx.fillStyle = "#00ff00";
-                  const width = ctx.measureText(label).width;
+                  // const width = ctx.measureText(label).width;
                   // ctx.fillRect(x1,y1,width+10,25);
                   // ctx.fillStyle = "#000000";
-                  ctx.fillText(label, x1, y1+18);
+                  ctx.fillText(label, x1*scale, (y1+18)*scale);
               });
               lines.forEach(([x1,y1,x2,y2]) => {
-                  ctx.strokeRect(x1,y1,x2-x1,y2-y1);
+                  ctx.strokeRect(x1*scale,y1*scale,(x2-x1)*scale,(y2-y1)*scale);
                   ctx.strokeStyle = "#000000";
                   // ctx.fillRect(x1,y1,width+10,25);
                   // ctx.fillStyle = "#000000";
               });
           }
       }
+
+      function calculateIntersectionArea(bbox1, bbox2) {
+          // Calculate the intersection area between two bounding boxes.
+          const x1 = Math.max(bbox1[0], bbox2[0]);
+          const y1 = Math.max(bbox1[1], bbox2[1]);
+          const x2 = Math.min(bbox1[2], bbox2[2]);
+          const y2 = Math.min(bbox1[3], bbox2[3]);
+
+          const width = Math.max(0, x2 - x1);
+          const height = Math.max(0, y2 - y1);
+
+          return width * height;
+      }
+
+      function getLastObjectKey(obj) {
+          const keys = Object.keys(obj);
+          return keys[keys.length - 1];
+      }
+
+
+      function dispatchElements(lineList, zoneList) {
+          // Create a dictionary to hold the dispatched elements.
+          const dispatchDict = {};
+
+          for (const currentLine of lineList) {
+              let maxIntersection = 0;
+              let targetBbox = null
+                  dispatchDictKey = null;
+
+              let currentLineBbox = [
+                  currentLine.bbox.x0,
+                  currentLine.bbox.y0,
+                  currentLine.bbox.x1,
+                  currentLine.bbox.y1
+                ];
+
+              for (const currentZone of zoneList) {
+
+                  const intersectionArea = calculateIntersectionArea(currentLineBbox, currentZone.slice(0, 4));
+
+                  if (intersectionArea > maxIntersection) {
+                      maxIntersection = intersectionArea;
+                      targetBbox = currentZone;
+                      dispatchDictKey = currentZone.slice(0, 4);
+                  }
+              }
+
+              if (maxIntersection > 0) {
+                  // Add the element to the target bbox in the dictionary.
+                  if (!dispatchDict[dispatchDictKey]) {
+                      dispatchDict[dispatchDictKey] = { elements: [], isOriginal: true, metadata: targetBbox};
+                  }
+                  dispatchDict[dispatchDictKey].elements.push(currentLine);
+              } else {
+                  // If there is no intersection, create a new element and mark it as original.
+                  let lastKey = getLastObjectKey(dispatchDict);
+                  if (!dispatchDict[lastKey].isOriginal) {
+                    dispatchDict[lastKey].elements.push(currentLine);
+                  } else {
+                    dispatchDict[currentLineBbox] = { elements: [currentLine], isOriginal: false, metadata: null};
+                  }
+              }
+          }
+
+          return dispatchDict;
+      }
+
 
       /**
        * Function receives an image, passes it through YOLOv8 neural network
@@ -169,19 +241,21 @@
 
           // Boxes : x, y, x2, y2, type, prob
 
-          const xml = {};
+          const xml = document.createElement("body");
 
-          for (var i = 0; i < boxes.length; i++) {
-            for (var j = 0; j < lines.length; j++) {
-              bbox = lines[j].bbox;
-              let center = computeBBoxCenter([bbox.x0, bbox.y0, bbox.x1, bbox.y1]);
-              if (isPointInBBox(center, boxes[i].slice(0, 4))) {
-                if (!(i in xml)) {
-                  xml[i] = document.createElement(getTag(boxes[i][4]));
-                }
-                xml[i].innerHTML += "<lb/> " + lines[j].text.trim() + "\n";
-              }
+
+          const dispatched = dispatchElements(lines, boxes);
+
+          for (const zone of Object.values(dispatched)) {
+            if (zone.isOriginal) {
+              xmlNode = document.createElement(getTag(zone.metadata[4]));
+            } else {
+              xmlNode = document.createElement("ab");
             }
+            for (var i = 0; i < zone.elements.length; i++) {
+              xmlNode.innerHTML += "<lb/> " + zone.elements[i].text.trim() + "\n";
+            }
+            xml.appendChild(xmlNode);
           }
 
           return {
@@ -199,7 +273,6 @@
       }
 
       function getTag(zone) {
-        console.log(zone);
         if (zone.startsWith("MainZone")) {
           if (zone.endsWith("-P")) {
             return "p";
@@ -358,10 +431,9 @@
 
       async function OCRize(img) {
         const worker = await Tesseract.createWorker('fra');
-        const data = await worker.recognize(img);
+        const {data : { lines }} = await worker.recognize(img);
         await worker.terminate();
-        console.log(data);
-        return data.lines;
+        return lines;
       };
     </script>
 </body>
