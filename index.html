@@ -61,6 +61,18 @@
               <input type="url" class="form-control" id="urlInput" value="https://gallica.bnf.fr/iiif/ark:/12148/bd6t5327037p/f582/full/,1200/0/native.jpg">
             </div>
           </div>
+          <div class="row mb-2">
+            <div class="col-sm-3 col-md-2 offset-md-3 offset-sm-3 col-form-label">
+              <div class="form-check">
+                <input type="radio" name="use" value="camInput" class="form-check-input" id="useCam"/>
+                <label for="useCam" class="form-check-label">Use your phone camera</label>
+              </div>
+            </div>
+            <div class="col-sm-4 text-start">
+              <input type="file" class="form-control" id="camInput" accept="image/*" capture="user">
+            </div>
+          </div>
+
           <div class="row">
             <div class="col-sm-12 text-center">
               <a class="btn btn-primary" id="button" href="#">Process</a>
@@ -139,10 +151,10 @@
                 input = document.getElementById(using);
           let val = null;
 
-          if (using === "uploadInput") {
-            val = input.files[0];
-          } else {
+          if (using === "urlInput") {
             val = input.value;
+          } else {
+            val = input.files[0];
           }
 
           const out = await detect_objects_on_image(val);
@@ -164,7 +176,8 @@
        */
       function draw_image_and_boxes(file, boxes, lines) {
           const img = new Image();
-          if (file.startsWith("http")) {
+          
+          if ((typeof file === 'string' || file instanceof String) && file.startsWith("http")) {
             img.crossOrigin = 'Anonymous';
             img.src = file;
           } else {
@@ -348,7 +361,7 @@
       async function prepare_input(buf) {
           return new Promise(resolve => {
               const img = new Image();
-              if (buf.startsWith("http")) {
+              if ((typeof buf === 'string' || buf instanceof String) && buf.startsWith("http")) {
                 img.crossOrigin = 'Anonymous';
                 img.src = buf;
               } else {
