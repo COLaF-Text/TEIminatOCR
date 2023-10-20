@@ -36,11 +36,29 @@
               </li>
             </ul>
           </div>
-      <hr />
+          <hr />
+          <h3>Form</h3>
+          <h4>Choose your input</h4>
           <div class="row mb-2">
-            <label for="inputEmail3" class="col-sm-4 text-end col-form-label">Image file to process</label>
-            <div class="col-sm-6 text-start">
+            <div class="col-sm-3 col-md-2 offset-md-3 offset-sm-3 col-form-label">
+              <div class="form-check">
+                <input type="radio" name="use" value="uploadInput" class="form-check-input" id="useUpload" />
+                <label for="useUpload" class="form-check-label">Upload an image</label>
+              </div>
+            </div>
+            <div class="col-sm-4 text-start">
               <input type="file" class="form-control" id="uploadInput">
+            </div>
+          </div>
+          <div class="row mb-2">
+            <div class="col-sm-3 col-md-2 offset-md-3 offset-sm-3 col-form-label">
+              <div class="form-check">
+                <input type="radio" name="use" value="urlInput" class="form-check-input" id="useURL" checked/>
+                <label for="useURL" class="form-check-label">Use an URL</label>
+              </div>
+            </div>
+            <div class="col-sm-4 text-start">
+              <input type="url" class="form-control" id="urlInput" value="https://gallica.bnf.fr/iiif/ark:/12148/bd6t5327037p/f582/full/,1200/0/native.jpg">
             </div>
           </div>
           <div class="row">
@@ -48,6 +66,7 @@
               <a class="btn btn-primary" id="button" href="#">Process</a>
             </div>
           </div>
+          <hr />
         </div>
       </div>
       <div class="row">
@@ -95,17 +114,41 @@
        * to backend, receives array of detected objects
        * and draws them on top of image
        */
-       const input = document.getElementById("uploadInput"),
-             textarea = document.getElementById("te"),
+       const textarea = document.getElementById("te"),
              button = document.getElementById("button");
+
+       function getMeTheRadio() {
+         const radioButtons = document.getElementsByName("use");
+         let selectedValue = null;
+
+          for (let i = 0; i < radioButtons.length; i++) {
+            if (radioButtons[i].checked) {
+              selectedValue = radioButtons[i].value;
+              break; // Exit the loop once the checked radio button is found
+            }
+          }
+         return selectedValue;
+       }
 
        button.addEventListener("click", async(event) => {
           event.preventDefault();
           button.innerText = "Be patient, it's coming";
-          const out = await detect_objects_on_image(input.files[0]);
+
+          // Define input
+          const using = getMeTheRadio(),
+                input = document.getElementById(using);
+          let val = null;
+
+          if (using === "uploadInput") {
+            val = input.files[0];
+          } else {
+            val = input.value;
+          }
+
+          const out = await detect_objects_on_image(val);
           textarea.value = out.xml.outerHTML.split("<lb>").join("<lb />").replace(/<\/lb>/g, '');
           draw_image_and_boxes(
-            input.files[0],
+            val,
             out.boxes,
             out.lines
           );
@@ -119,9 +162,14 @@
        * @param file Uploaded file object
        * @param boxes Array of bounding boxes in format [[x1,y1,x2,y2,object_type,probability],...]
        */
-      function draw_image_and_boxes(file,boxes, lines) {
-          const img = new Image()
-          img.src = URL.createObjectURL(file);
+      function draw_image_and_boxes(file, boxes, lines) {
+          const img = new Image();
+          if (file.startsWith("http")) {
+            img.crossOrigin = 'Anonymous';
+            img.src = file;
+          } else {
+            img.src = URL.createObjectURL(file);
+          }
           img.onload = () => {
               const canvas = document.querySelector("canvas");
               const scale =  textarea.offsetWidth / img.width;
@@ -136,16 +184,11 @@
               boxes.forEach(([x1,y1,x2,y2,label]) => {
                   ctx.strokeRect(x1*scale,y1*scale,(x2-x1)*scale,(y2-y1)*scale);
                   ctx.fillStyle = "#00ff00";
-                  // const width = ctx.measureText(label).width;
-                  // ctx.fillRect(x1,y1,width+10,25);
-                  // ctx.fillStyle = "#000000";
                   ctx.fillText(label, x1*scale, (y1+18)*scale);
               });
               lines.forEach(([x1,y1,x2,y2]) => {
                   ctx.strokeRect(x1*scale,y1*scale,(x2-x1)*scale,(y2-y1)*scale);
                   ctx.strokeStyle = "#000000";
-                  // ctx.fillRect(x1,y1,width+10,25);
-                  // ctx.fillStyle = "#000000";
               });
           }
       }
@@ -305,7 +348,12 @@
       async function prepare_input(buf) {
           return new Promise(resolve => {
               const img = new Image();
-              img.src = URL.createObjectURL(buf);
+              if (buf.startsWith("http")) {
+                img.crossOrigin = 'Anonymous';
+                img.src = buf;
+              } else {
+                img.src = URL.createObjectURL(buf);
+              }
               img.onload = () => {
                   const [img_width,img_height] = [img.width, img.height]
                   const canvas = document.createElement("canvas");
@@ -430,8 +478,12 @@
       // Javascript
 
       async function OCRize(img) {
-        const worker = await Tesseract.createWorker('fra');
-        const {data : { lines }} = await worker.recognize(img);
+        const worker = await Tesseract.createWorker('fra+osd');
+        const {data : { lines }} = await worker.recognize(
+          img//,
+          // Works badly...
+          //{tessedit_pageseg_mode: '1'}
+          );
         await worker.terminate();
         return lines;
       };
