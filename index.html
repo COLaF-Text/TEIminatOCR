@@ -7,16 +7,21 @@
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
     <script src="https://cdn.jsdelivr.net/npm/xml-beautify@1.2.3/dist/XmlBeautify.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <!-- and it's easy to individually load additional languages -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/xml.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     <style>
       canvas {
           display:block;
           border: 1px solid black;
           margin-top:10px;
+      }
+      pre {
+        background-color: #f2f2f2;
+        border-radius: 10px;
+        padding: 10px;
       }
     </style>
 </head>
@@ -27,6 +32,7 @@
           <div class="mb-2">
             <h1>Welcome to the TEIminatOCR</h1>
             <p>TEIminatOCR is an application that reuses object identification for segmenting and recognizing zones of texts, OCR using TesseractJS and the Segmonto ontology. Images that you will load will be first segmented through YOLO object detection, then OCRized. Bounding box of lines are then dispatched in each area and the TEI is produced for the output.</p>
+            <p><em>TEIminatOCR</em> is developed by Thibault Clérice (ALMAnaCH, Inria) as a demonstration of what can be done through the <em>COLaF Segmonto - CORPUS</em> (T. Clérice, J. Janès, H. Scheithauer).</p>
             <h3>Bibliography</h3>
             <ul style="font-size:smaller;">
               <li>
@@ -92,6 +98,7 @@
           <canvas id="canva"></canvas>
         </div>
         <div class="col-md-5">
+          <a class="btn btn-secondary" id="download-tei">Download the output (when the output is here)</a>
           <pre id="te" style="min-height:400px; width: 100%;"></pre>
         </div>
       </div>
@@ -184,10 +191,11 @@
             }
 
             const out = await this.detect_objects_on_image(val);
+            const serializer = new XMLSerializer();
             this.textarea.innerHTML = hljs.highlight(
               this.formatXml( // Little hack that does not work
-                  "<?xml version=\"1.0\" encoding=\"utf-8\"?>"+out.xml.outerHTML
-              ).split("<lb>").join("<lb/>").replace(/<\/lb>/g, ''),
+                  serializer.serializeToString(out.xml)
+              ),//.split("<lb>").join("<lb/>").replace(/<\/lb>/g, '').replace('<TEI>', '<TEI xmlns="http://www.tei-c.org/ns/1.0">'),
               { language: 'xml' }
             ).value;
             this.draw_image_and_boxes(
@@ -226,7 +234,33 @@
          */
         draw_image_and_boxes(file, boxes, lines) {
             const img = new Image();
-
+            const colorPalette = {
+              "DigitalArtefactZone": "#FF5733",
+              "DropCapitalZone": "#00A896",
+              "GraphicZone": "#FFC30F",
+              "GraphicZone-Legend": "#3943B7",
+              "GraphicZone-Maths": "#E71D36",
+              "MainZone-Entry": "#0D98BA",
+              "MainZone-Head": "#3EC300",
+              "MainZone-Lg": "#BF4E51",
+              "MainZone-Other": "#FF8A00",
+              "MainZone-P": "#A7003D",
+              "Mainzone-Sp": "#0077A7",
+              "MarginTextZone-Notes": "#0D1B2A",
+              "NumberingZone": "#FF45E6",
+              "PageTitleZone": "#00A896",
+              "PageTitleZone-Index": "#3943B7",
+              "RunnningTitleZone": "#FFC30F",
+              "StampZone": "#FF5733",
+              "TableZone": "#E71D36",
+              "TableZone-Legend": "#3EC300"
+            };
+            const hex2rgba = function(hexa, alpha){
+              const r = parseInt(hexa.slice(1, 3), 16),
+                    g = parseInt(hexa.slice(3, 5), 16),
+                    b = parseInt(hexa.slice(5, 7), 16);
+              return 'rgba('+r+', '+g+', '+b+', '+alpha+')';
+            }
             if ((typeof file === 'string' || file instanceof String) && file.startsWith("http")) {
                 img.crossOrigin = 'Anonymous';
                 img.crossDomain = true;
@@ -241,12 +275,14 @@
                 const ctx = this.canva.getContext("2d");
                 ctx.imageSmoothingEnabled = false;
                 ctx.drawImage(img, 0, 0, this.canva.width, this.canva.height);
-                ctx.strokeStyle = "#00FF00";
                 ctx.lineWidth = 1;
                 ctx.font = "18px serif";
                 boxes.forEach(([x1, y1, x2, y2, label]) => {
+                    ctx.strokeStyle = colorPalette[label] || "#3EC300";
                     ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
-                    ctx.fillStyle = "#00ff00";
+                    ctx.fillStyle = hex2rgba(ctx.strokeStyle, .5);
+                    ctx.fillRect(x1 * scale, y1 * scale, (ctx.measureText(label).width+10) * scale, 25 * scale);
+                    ctx.fillStyle = "#000000";
                     ctx.fillText(label, x1 * scale, (y1 + 18) * scale);
                 });
                 lines.forEach(([x1, y1, x2, y2]) => {
@@ -281,7 +317,33 @@
           });
 
           // Boxes : x, y, x2, y2, type, prob
-          const xml = document.createElement("body");
+          const parser = new DOMParser();
+          const xml = parser.parseFromString(
+          `<?xml version="1.0" encoding="UTF-8"?>
+<?xml-model href="http://www.tei-c.org/release/xml/tei/custom/schema/relaxng/tei_bare.rng" type="application/xml" schematypens="http://relaxng.org/ns/structure/1.0"?>
+<?xml-model href="http://www.tei-c.org/release/xml/tei/custom/schema/relaxng/tei_bare.rng" type="application/xml"
+\tschematypens="http://purl.oclc.org/dsdl/schematron"?>
+<TEI>
+<teiHeader>
+    <fileDesc>
+       <titleStmt>
+          <title>Title</title>
+       </titleStmt>
+       <publicationStmt>
+          <p>Publication Information</p>
+       </publicationStmt>
+       <sourceDesc>
+          <p>Information about the source</p>
+       </sourceDesc>
+    </fileDesc>
+</teiHeader>
+<text>
+    <body>
+    </body>
+</text>
+</TEI>
+`, "text/xml");
+          const body = xml.documentElement.getElementsByTagName("body")[0];
           const dispatched = this.dispatchElements(lines, boxes);
 
           // Create the nodes based on tags and fill them with lines
@@ -294,7 +356,7 @@
             for (let i = 0; i < zone.elements.length; i++) {
               zoneObj.elem.innerHTML += "<lb/>" + zone.elements[i].text.trim() + "\r\n";
             }
-            xml.appendChild(zoneObj.doc.documentElement);
+            body.appendChild(zoneObj.doc.documentElement);
           }
           return {
             "boxes": boxes,
@@ -696,7 +758,25 @@
           return dispatchDict;
         }
       }
-      const runner = new Teiminatocr(800, 800, .3, .5, 13125);
+      const runner = new Teiminatocr(640, 640, .3, .1, 8400);
+      const tei_button = document.getElementById("download-tei");
+      tei_button.addEventListener("click", async(event) => {
+        event.preventDefault();
+        // Get the content of the XML element
+        const xmlContent = document.getElementById("te").innerText;
+
+        // Create an anchor element to trigger the download
+        const a = document.createElement("a");
+        a.href = "data:text/xml;charset=utf-8," + encodeURIComponent(xmlContent);
+        a.download = "TEI.xml"; // Set the filename for the download
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        // Trigger a click event on the anchor element
+        a.click();
+
+        // Release the object URL to free up resources
+        document.body.removeChild(a);
+      });
     </script>
 </body>
 </html>
