@@ -58,7 +58,7 @@
               </div>
             </div>
             <div class="col-sm-4 text-start">
-              <input type="url" class="form-control" id="urlInput" value="https://gallica.bnf.fr/iiif/ark:/12148/bd6t5327037p/f582/full/,1200/0/native.jpg">
+              <input type="url" class="form-control" id="urlInput" value="https://gallica.bnf.fr/iiif/ark:/12148/bd6t5327037p/f582/full/,1200/0/native.jpg" />
             </div>
           </div>
           <div class="row mb-2">
@@ -83,7 +83,7 @@
       </div>
       <div class="row">
         <div class="col-md-5 offset-md-1">
-          <canvas></canvas>
+          <canvas id="canva"></canvas>
         </div>
         <div class="col-md-5">
           <textarea id="te" style="min-height:400px; width: 100%;"></textarea>
@@ -92,199 +92,141 @@
     </div>
 
     <script>
-      const IMG_WIDTH = 640, 
-            IMG_HEIGHT = 640,
-            MIN_PROB = .2,
-            OVERLAP = 0.3,
-            OUT_SIZE = 8400; // Depends on your model (1, 23, 13125) is the output shape for us
+      class Teiminatocr {
+        constructor(
+                img_width,
+                img_height,
+                yolo_min_prob,
+                yolo_overlap,
+                yolo_model_out_size,
+                radio_name,
+                textarea_id,
+                submit_id,
+                canva_id
+        ) {
+          this.img_width = img_width || 640;
+          this.img_height = img_height || 640;
+          this.yolo_min_prob = yolo_min_prob || 0.2;
+          this.yolo_overlap = yolo_overlap || 0.3;
 
-      /** Check if an element is in a bbox
-       * 
-       */
-      // Function to check if a point is within a bounding box
-      function isPointInBBox(point, bbox) {
-          return (
-              point[0] >= bbox[0] && // Check X coordinate
-              point[0] <= bbox[2] &&
-              point[1] >= bbox[1] && // Check Y coordinate
-              point[1] <= bbox[3]
-          );
-      }
-      function computeBBoxCenter(bbox) {
-          if (bbox.length !== 4) {
-              throw new Error("Bounding box should have 4 coordinates: [left, top, right, bottom]");
-          }
+          // Depends on your model (1, 23, 13125) is the output shape for us with 800*800
+          this.yolo_model_out_size = yolo_model_out_size || 8400;
 
-          const centerX = (bbox[0] + bbox[2]) / 2;
-          const centerY = (bbox[1] + bbox[3]) / 2;
+          this.radio_name = radio_name || "use";
+          this.textarea = document.getElementById(textarea_id || "te");
+          this.button = document.getElementById(submit_id || "button");
+          this.canva = document.getElementById(canva_id || "canva");
+          this.yolo_classes = [
+                  "DigitizationArtefactZone", "DropCapitalZone", "GraphicZone",
+            "GraphicZone-Legend", "GraphicZone-Maths", "MainZone-Entry",
+            "MainZone-Head", "MainZone-Lg", "MainZone-Other", "MainZone-P",
+            "MainZone-Sp", "MarginTextZone-Notes", "NumberingZone", "PageTitleZone",
+            "PageTitleZone-Index", "RunningTitleZone", "StampZone", "TableZone", "TableZone-Legend"
+          ];
+          this.setup_button(this.button);
+        }
 
-          return [centerX, centerY];
-      }
+        /**
+         * Binds the processing function to a button
+         * @param button document Node on which to bind the click event.
+         */
+        setup_button(button) {
+          button.addEventListener("click", async(event) => {
+            event.preventDefault();
+            button.innerText = "Be patient, it's coming";
 
-      /**
-       * "Upload" button onClick handler: uploads selected image file
-       * to backend, receives array of detected objects
-       * and draws them on top of image
-       */
-       const textarea = document.getElementById("te"),
-             button = document.getElementById("button");
+            // Define input
+            const using = this.getMeTheRadio(),
+                  input = document.getElementById(using);
+            let val = null;
 
-       function getMeTheRadio() {
-         const radioButtons = document.getElementsByName("use");
-         let selectedValue = null;
+            if (using === "urlInput") {
+              val = input.value;
+            } else {
+              val = input.files[0];
+            }
 
+            const out = await this.detect_objects_on_image(val);
+            this.textarea.value = out.xml.outerHTML.split("<lb>").join("<lb />").replace(/<\/lb>/g, '');
+            this.draw_image_and_boxes(
+              val,
+              out.boxes,
+              out.lines
+            );
+            button.innerText = "Process";
+         });
+        }
+
+        /**
+         * Gets the value of the selected radio providing the image.
+         *
+         * @returns {string} The value of the selected radio button, or null if none is selected.
+         */
+        getMeTheRadio() {
+          const radioButtons = document.getElementsByName(this.radio_name);
+          let selectedValue = null;
           for (let i = 0; i < radioButtons.length; i++) {
             if (radioButtons[i].checked) {
               selectedValue = radioButtons[i].value;
               break; // Exit the loop once the checked radio button is found
             }
           }
-         return selectedValue;
-       }
+          return selectedValue;
+        }
 
-       button.addEventListener("click", async(event) => {
-          event.preventDefault();
-          button.innerText = "Be patient, it's coming";
+        /**
+         * Function draws the image from provided file
+         * and bounding boxes of detected objects on
+         * top of the image
+         * @param file Uploaded file object
+         * @param boxes Array of bounding boxes in format [[x1,y1,x2,y2,object_type,probability],...]
+         * @param lines Array of lines objects with bounding boxes in format [[x1,y1,x2,y2], ...]
+         */
+        draw_image_and_boxes(file, boxes, lines) {
+            const img = new Image();
 
-          // Define input
-          const using = getMeTheRadio(),
-                input = document.getElementById(using);
-          let val = null;
+            if ((typeof file === 'string' || file instanceof String) && file.startsWith("http")) {
+                img.crossOrigin = 'Anonymous';
+                img.src = file;
+            } else {
+                img.src = URL.createObjectURL(file);
+            }
+            img.onload = () => {
+                const scale = this.textarea.offsetWidth / img.width;
+                this.canva.width = this.textarea.offsetWidth;
+                this.canva.height = img.height * scale;
+                const ctx = this.canva.getContext("2d");
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(img, 0, 0, this.canva.width, this.canva.height);
+                ctx.strokeStyle = "#00FF00";
+                ctx.lineWidth = 1;
+                ctx.font = "18px serif";
+                boxes.forEach(([x1, y1, x2, y2, label]) => {
+                    ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+                    ctx.fillStyle = "#00ff00";
+                    ctx.fillText(label, x1 * scale, (y1 + 18) * scale);
+                });
+                lines.forEach(([x1, y1, x2, y2]) => {
+                    ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+                    ctx.strokeStyle = "#000000";
+                });
+            }
+        }
 
-          if (using === "urlInput") {
-            val = input.value;
-          } else {
-            val = input.files[0];
-          }
-
-          const out = await detect_objects_on_image(val);
-          textarea.value = out.xml.outerHTML.split("<lb>").join("<lb />").replace(/<\/lb>/g, '');
-          draw_image_and_boxes(
-            val,
-            out.boxes,
-            out.lines
-          );
-          button.innerText = "Process";
-       })
-
-      /**
-       * Function draws the image from provided file
-       * and bounding boxes of detected objects on
-       * top of the image
-       * @param file Uploaded file object
-       * @param boxes Array of bounding boxes in format [[x1,y1,x2,y2,object_type,probability],...]
-       */
-      function draw_image_and_boxes(file, boxes, lines) {
-          const img = new Image();
-          
-          if ((typeof file === 'string' || file instanceof String) && file.startsWith("http")) {
-            img.crossOrigin = 'Anonymous';
-            img.src = file;
-          } else {
-            img.src = URL.createObjectURL(file);
-          }
-          img.onload = () => {
-              const canvas = document.querySelector("canvas");
-              const scale =  textarea.offsetWidth / img.width;
-              canvas.width = textarea.offsetWidth;
-              canvas.height = img.height * scale;
-              const ctx = canvas.getContext("2d");
-              ctx.imageSmoothingEnabled = false;
-              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-              ctx.strokeStyle = "#00FF00";
-              ctx.lineWidth = 1;
-              ctx.font = "18px serif";
-              boxes.forEach(([x1,y1,x2,y2,label]) => {
-                  ctx.strokeRect(x1*scale,y1*scale,(x2-x1)*scale,(y2-y1)*scale);
-                  ctx.fillStyle = "#00ff00";
-                  ctx.fillText(label, x1*scale, (y1+18)*scale);
-              });
-              lines.forEach(([x1,y1,x2,y2]) => {
-                  ctx.strokeRect(x1*scale,y1*scale,(x2-x1)*scale,(y2-y1)*scale);
-                  ctx.strokeStyle = "#000000";
-              });
-          }
-      }
-
-      function calculateIntersectionArea(bbox1, bbox2) {
-          // Calculate the intersection area between two bounding boxes.
-          const x1 = Math.max(bbox1[0], bbox2[0]);
-          const y1 = Math.max(bbox1[1], bbox2[1]);
-          const x2 = Math.min(bbox1[2], bbox2[2]);
-          const y2 = Math.min(bbox1[3], bbox2[3]);
-
-          const width = Math.max(0, x2 - x1);
-          const height = Math.max(0, y2 - y1);
-
-          return width * height;
-      }
-
-      function getLastObjectKey(obj) {
-          const keys = Object.keys(obj);
-          return keys[keys.length - 1];
-      }
-
-
-      function dispatchElements(lineList, zoneList) {
-          // Create a dictionary to hold the dispatched elements.
-          const dispatchDict = {};
-
-          for (const currentLine of lineList) {
-              let maxIntersection = 0;
-              let targetBbox = null
-                  dispatchDictKey = null;
-
-              let currentLineBbox = [
-                  currentLine.bbox.x0,
-                  currentLine.bbox.y0,
-                  currentLine.bbox.x1,
-                  currentLine.bbox.y1
-                ];
-
-              for (const currentZone of zoneList) {
-
-                  const intersectionArea = calculateIntersectionArea(currentLineBbox, currentZone.slice(0, 4));
-
-                  if (intersectionArea > maxIntersection) {
-                      maxIntersection = intersectionArea;
-                      targetBbox = currentZone;
-                      dispatchDictKey = currentZone.slice(0, 4);
-                  }
-              }
-
-              if (maxIntersection > 0) {
-                  // Add the element to the target bbox in the dictionary.
-                  if (!dispatchDict[dispatchDictKey]) {
-                      dispatchDict[dispatchDictKey] = { elements: [], isOriginal: true, metadata: targetBbox};
-                  }
-                  dispatchDict[dispatchDictKey].elements.push(currentLine);
-              } else {
-                  // If there is no intersection, create a new element and mark it as original.
-                  let lastKey = getLastObjectKey(dispatchDict);
-                  if ((lastKey) && !(dispatchDict[lastKey].isOriginal)) {
-                    dispatchDict[lastKey].elements.push(currentLine);
-                  } else {
-                    dispatchDict[currentLineBbox] = { elements: [currentLine], isOriginal: false, metadata: null};
-                  }
-              }
-          }
-
-          return dispatchDict;
-      }
-
-
-      /**
-       * Function receives an image, passes it through YOLOv8 neural network
-       * and returns an array of detected objects and their bounding boxes
-       * @param buf Input image body
-       * @returns Array of bounding boxes in format [[x1,y1,x2,y2,object_type,probability],..]
-       */
-      async function detect_objects_on_image(buf) {
-          const [img, input,img_width,img_height] = await prepare_input(buf);
-          const output = await run_model(input);
-          const lines = await OCRize(img);
-          boxes = process_output(output,img_width,img_height);
-
+        /**
+         * Function receives an image, passes it through YOLOv8 neural network
+         * and returns an array of detected objects and their bounding boxes
+         * @param buf Input image body
+         * @returns {Object} An object with the following properties:
+         *   - `boxes` (Array): An array of bounding boxes in format [[x1,y1,x2,y2,object_type,probability],...].
+         *   - `xml` (Node): XML data.
+         *   - `lines` (Array): An array of lines represented as arrays of coordinates in the format [x0, y0, x1, y1].
+         */
+        async detect_objects_on_image(buf) {
+          const [img, input, img_width, img_height] = await this.prepare_input(buf);
+          const output = await this.run_model(input);
+          const lines = await this.OCRize(img);
+          const boxes = this.process_output(output, img_width, img_height);
           boxes.sort((a, b) => {
             // Compare the second floating-point element (index 1) first
             if (a[1] !== b[1]) {
@@ -296,15 +238,14 @@
           });
 
           // Boxes : x, y, x2, y2, type, prob
-
           const xml = document.createElement("body");
+          const dispatched = this.dispatchElements(lines, boxes);
 
-
-          const dispatched = dispatchElements(lines, boxes);
-
+          // Create the nodes based on tags and fill them with lines
           for (const zone of Object.values(dispatched)) {
+            let xmlNode;
             if (zone.isOriginal) {
-              xmlNode = document.createElement(getTag(zone.metadata[4]));
+              xmlNode = document.createElement(this.getTag(zone.metadata[4]));
             } else {
               xmlNode = document.createElement("ab");
             }
@@ -317,189 +258,275 @@
           return {
             "boxes": boxes,
             "xml": xml,
-            "lines": lines.map((el) => { 
-                  return [
-                    el.bbox.x0,
-                    el.bbox.y0,
-                    el.bbox.x1,
-                    el.bbox.y1
-                  ];
-              })
+            "lines": lines.map(this.map_bbox_to_array)
           };
-      }
-
-      function getTag(zone) {
-        if (zone.startsWith("MainZone")) {
-          if (zone.endsWith("-P")) {
-            return "p";
-          } else if (zone.endsWith("-Head")) {
-            return "head";
-          } else if (zone.endsWith("-Lg")) {
-            return "lg";
-          } else if (zone.endsWith("-Sp")) {
-            return "sp";
-          } else if (zone.endsWith("-Entry")) {
-            return "entryFree";
-          } else if (zone.endsWith("-Other")) {
-            return "ab";
-          }
-        } else if (zone.startsWith("MarginTextZone")) {
-          return "note";
-        } else {
-          return "ab";
         }
 
-      }
+        /**
+         * Get the last inserted object key in an object
+         * @param obj An object
+         * @returns {string} The key of the last inserted item.
+         */
+        getLastObjectKey(obj) {
+          const keys = Object.keys(obj);
+          return keys[keys.length - 1];
+        }
 
-      /**
-       * Function used to convert input image to tensor,
-       * required as an input to YOLOv8 object detection
-       * network.
-       * @param buf Content of uploaded file
-       * @returns Array of pixels
-       */
-      async function prepare_input(buf) {
+        /**
+         * Get the type of node back from the zone
+         * @param zone Type of the YOLO class
+         * @returns {string} XML Tag name
+         */
+        getTag(zone) {
+          if (zone.startsWith("MainZone")) {
+            if (zone.endsWith("-P")) {
+              return "p";
+            } else if (zone.endsWith("-Head")) {
+              return "head";
+            } else if (zone.endsWith("-Lg")) {
+              return "lg";
+            } else if (zone.endsWith("-Sp")) {
+              return "sp";
+            } else if (zone.endsWith("-Entry")) {
+              return "entryFree";
+            } else if (zone.endsWith("-Other")) {
+              return "ab";
+            }
+          } else if (zone.startsWith("MarginTextZone")) {
+            return "note";
+          } else {
+            return "ab";
+          }
+        }
+
+        /**
+         * Function used to convert input image to tensor,
+         * required as an input to YOLOv8 object detection
+         * network.
+         * @param buf Content of uploaded file
+         * @returns Array of pixels
+         */
+        async prepare_input(buf) {
           return new Promise(resolve => {
               const img = new Image();
               if ((typeof buf === 'string' || buf instanceof String) && buf.startsWith("http")) {
-                img.crossOrigin = 'Anonymous';
-                img.src = buf;
+                  img.crossOrigin = 'Anonymous';
+                  img.src = buf;
               } else {
-                img.src = URL.createObjectURL(buf);
+                  img.src = URL.createObjectURL(buf);
               }
               img.onload = () => {
-                  const [img_width,img_height] = [img.width, img.height]
+                  const [img_width, img_height] = [img.width, img.height]
                   const canvas = document.createElement("canvas");
-                  canvas.width = IMG_WIDTH;
-                  canvas.height = IMG_HEIGHT;
+                  canvas.width = this.img_width;
+                  canvas.height = this.img_height;
                   const context = canvas.getContext("2d");
-                  context.drawImage(img,0,0,IMG_WIDTH,IMG_HEIGHT);
-                  const imgData = context.getImageData(0,0,IMG_WIDTH,IMG_HEIGHT);
+                  context.drawImage(img, 0, 0, this.img_width, this.img_height);
+                  const imgData = context.getImageData(0, 0, this.img_width, this.img_height);
                   const pixels = imgData.data;
 
-                  const red = [], green = [], blue = [];
-                  for (let index=0; index<pixels.length; index+=4) {
-                      red.push(pixels[index]/255.0);
-                      green.push(pixels[index+1]/255.0);
-                      blue.push(pixels[index+2]/255.0);
+                  const red = [],
+                      green = [],
+                      blue = [];
+                  for (let index = 0; index < pixels.length; index += 4) {
+                      red.push(pixels[index] / 255.0);
+                      green.push(pixels[index + 1] / 255.0);
+                      blue.push(pixels[index + 2] / 255.0);
                   }
                   const input = [...red, ...green, ...blue];
                   resolve([img, input, img_width, img_height])
               }
-          })
-      }
+          });
+        }
 
-      /**
-       * Function used to pass provided input tensor to YOLOv8 neural network and return result
-       * @param input Input pixels array
-       * @returns Raw output of neural network as a flat array of numbers
-       */
-      async function run_model(input) {
+        /**
+         * Function used to pass provided input tensor to YOLOv8 neural network and return result
+         * @param input Input pixels array
+         * @returns Raw output of neural network as a flat array of numbers
+         */
+        async run_model(input) {
           const model = await ort.InferenceSession.create("model.onnx");
-          input = new ort.Tensor(Float32Array.from(input),[1, 3, IMG_HEIGHT, IMG_WIDTH]);
+          input = new ort.Tensor(Float32Array.from(input),[1, 3, this.img_width, this.img_height]);
           const outputs = await model.run({images:input});
           return outputs["output0"].data;
-      }
+        }
 
-      /**
-       * Function used to convert RAW output from YOLOv8 to an array of detected objects.
-       * Each object contain the bounding box of this object, the type of object and the probability
-       * @param output Raw output of YOLOv8 network
-       * @param img_width Width of original image
-       * @param img_height Height of original image
-       * @returns Array of detected objects in a format [[x1,y1,x2,y2,object_type,probability],..]
-       */
-      function process_output(output, img_width, img_height) {
-          let boxes = [];
-          for (let index=0;index<OUT_SIZE;index++) {
-              const [class_id,prob] = [...Array(80).keys()]
-                  .map(col => [col, output[OUT_SIZE*(col+4)+index]])
-                  .reduce((accum, item) => item[1]>accum[1] ? item : accum,[0,0]);
-              if (prob < MIN_PROB) {
-                  continue;
+        /**
+         * Performs OCR (Optical Character Recognition) on an image to extract text lines.
+         *
+         * @param {Image} img - The image to be processed for text extraction.
+         * @param {string} language - The language for OCR
+         * @returns {Array} An array of line objects containing recognized text lines.
+         * @throws {Error} If an error occurs during the OCR process.
+         */
+        async OCRize(img, language) {
+          try {
+            // Create a Tesseract worker with the specified language model.
+            const worker = await Tesseract.createWorker(language || "fra+osd");
+
+            // Recognize text lines in the provided image.
+            const { data: { lines } } = await worker.recognize(img);
+
+            // Terminate the worker to release resources.
+            await worker.terminate();
+
+            return lines;
+          } catch (error) {
+            // Handle and throw any errors that occur during the OCR process.
+            throw new Error(`OCR process failed: ${error.message}`);
+          }
+        }
+
+        /**
+         * Function used to convert RAW output from YOLOv8 to an array of detected objects.
+         * Each object contain the bounding box of this object, the type of object and the probability
+         * @param output Raw output of YOLOv8 network
+         * @param img_width Width of original image
+         * @param img_height Height of original image
+         * @returns {Array[]} - Array of detected objects in a format [[x1,y1,x2,y2,object_type,probability],..]
+         */
+        process_output(output, img_width, img_height) {
+            let boxes = [];
+            for (let index = 0; index < this.yolo_model_out_size; index++) {
+
+                const [class_id, prob] = [...Array(80).keys()].map(
+                        col => [col, output[this.yolo_model_out_size * (col + 4) + index]]
+                ).reduce(
+                        (accum, item) => item[1] > accum[1] ? item : accum, [0, 0]
+                );
+
+                if (prob < this.yolo_min_prob) {
+                    continue;
+                }
+                const label = this.yolo_classes[class_id];
+                const xc = output[index];
+                const yc = output[this.yolo_model_out_size + index];
+                const w = output[2 * this.yolo_model_out_size + index];
+                const h = output[3 * this.yolo_model_out_size + index];
+                const x1 = (xc - w / 2) / this.img_width * img_width;
+                const y1 = (yc - h / 2) / this.img_height * img_height;
+                const x2 = (xc + w / 2) / this.img_width * img_width;
+                const y2 = (yc + h / 2) / this.img_height * img_height;
+                boxes.push([x1, y1, x2, y2, label, prob]);
+            }
+
+            boxes = boxes.sort((box1, box2) => box2[5] - box1[5])
+            const result = [];
+            while (boxes.length > 0) {
+                result.push(boxes[0]);
+                boxes = boxes.filter(box => this.iou(boxes[0], box) < this.yolo_overlap);
+            }
+            return result;
+        }
+
+        /**
+         * Function calculates "Intersection-over-union" coefficient for specified two boxes
+         * https://pyimagesearch.com/2016/11/07/intersection-over-union-iou-for-object-detection/.
+         * @param box1 First box in format: [x1,y1,x2,y2,object_class,probability]
+         * @param box2 Second box in format: [x1,y1,x2,y2,object_class,probability]
+         * @returns Intersection over union ratio as a float number
+         */
+        iou(box1,box2) {
+            return this.intersection(box1, box2) / this.union(box1, box2);
+        }
+
+        /**
+         * Function calculates union area of two boxes.
+         *     :param box1: First box in format [x1,y1,x2,y2,object_class,probability]
+         *     :param box2: Second box in format [x1,y1,x2,y2,object_class,probability]
+         *     :return: Area of the boxes union as a float number
+         * @param box1 First box in format [x1,y1,x2,y2,object_class,probability]
+         * @param box2 Second box in format [x1,y1,x2,y2,object_class,probability]
+         * @returns Area of the boxes union as a float number
+         */
+        union(box1,box2) {
+            const [box1_x1,box1_y1,box1_x2,box1_y2] = box1;
+            const [box2_x1,box2_y1,box2_x2,box2_y2] = box2;
+            const box1_area = (box1_x2-box1_x1)*(box1_y2-box1_y1)
+            const box2_area = (box2_x2-box2_x1)*(box2_y2-box2_y1)
+            return box1_area + box2_area - this.intersection(box1,box2)
+        }
+
+        /**
+         * Function calculates intersection area of two boxes
+         * @param box1 First box in format [x1,y1,x2,y2,object_class,probability]
+         * @param box2 Second box in format [x1,y1,x2,y2,object_class,probability]
+         * @returns Area of intersection of the boxes as a float number
+         */
+        intersection(box1,box2) {
+            const [box1_x1,box1_y1,box1_x2,box1_y2] = box1;
+            const [box2_x1,box2_y1,box2_x2,box2_y2] = box2;
+            const x1 = Math.max(box1_x1,box2_x1);
+            const y1 = Math.max(box1_y1,box2_y1);
+            const x2 = Math.min(box1_x2,box2_x2);
+            const y2 = Math.min(box1_y2,box2_y2);
+            return (x2-x1)*(y2-y1)
+        }
+
+        /**
+         * Given an object with a property bbox, returns an array of X Y
+         * @param obj Object with a property box
+         * @returns {*[]} Array in format [x1,y1,x2,y2]
+         */
+        map_bbox_to_array(obj) {
+          return [obj.bbox.x0, obj.bbox.y0, obj.bbox.x1, obj.bbox.y1];
+        }
+
+        /**
+         * Given a list of lines and a list of zones, dispatch lines into zones. For lines without zones, create new one
+         * @param lineList List of line from Tesseract
+         * @param zoneList List of zones
+         * @returns {{}} Object with structure {key: {elements: [lineObj, ...], isOriginal: bool, metadata: zoneObj}}
+         */
+        dispatchElements(lineList, zoneList) {
+          // Create a dictionary to hold the dispatched elements.
+          const dispatchDict = {};
+
+          for (const currentLine of lineList) {
+              let maxIou = 0;
+              let targetBbox = null
+              let dispatchDictKey = null;
+              let currentLineBbox = this.map_bbox_to_array(currentLine);
+
+              // Iterate over the zones and find which zone has the max IOU of all
+              for (const currentZone of zoneList) {
+                  const iou = this.iou(currentLineBbox, currentZone.slice(0, 4));
+                  if (iou > maxIou) {
+                      maxIou = iou;
+                      targetBbox = currentZone;
+                      dispatchDictKey = currentZone.slice(0, 4);
+                  }
               }
-              const label = yolo_classes[class_id];
-              const xc = output[index];
-              const yc = output[OUT_SIZE+index];
-              const w = output[2*OUT_SIZE+index];
-              const h = output[3*OUT_SIZE+index];
-              const x1 = (xc-w/2)/IMG_WIDTH*img_width;
-              const y1 = (yc-h/2)/IMG_HEIGHT*img_height;
-              const x2 = (xc+w/2)/IMG_WIDTH*img_width;
-              const y2 = (yc+h/2)/IMG_HEIGHT*img_height;
-              boxes.push([x1,y1,x2,y2,label,prob]);
+
+              if (maxIou > 0) {
+                  // Add the element to the target bbox in the dictionary.
+                  if (!dispatchDict[dispatchDictKey]) {
+                      dispatchDict[dispatchDictKey] = {
+                          elements: [],
+                          isOriginal: true,
+                          metadata: targetBbox
+                      };
+                  }
+                  dispatchDict[dispatchDictKey].elements.push(currentLine);
+              } else {
+                  // If there is no intersection, create a new element and mark it as original.
+                  let lastKey = this.getLastObjectKey(dispatchDict);
+                  if ((lastKey) && !(dispatchDict[lastKey].isOriginal)) {
+                      dispatchDict[lastKey].elements.push(currentLine);
+                  } else {
+                      dispatchDict[currentLineBbox] = {
+                          elements: [currentLine],
+                          isOriginal: false,
+                          metadata: null
+                      };
+                  }
+              }
           }
-
-          boxes = boxes.sort((box1,box2) => box2[5]-box1[5])
-          const result = [];
-          while (boxes.length>0) {
-              result.push(boxes[0]);
-              boxes = boxes.filter(box => iou(boxes[0],box)<OVERLAP);
-          }
-          return result;
+          return dispatchDict;
+        }
       }
+      const runner = new Teiminatocr();
 
-      /**
-       * Function calculates "Intersection-over-union" coefficient for specified two boxes
-       * https://pyimagesearch.com/2016/11/07/intersection-over-union-iou-for-object-detection/.
-       * @param box1 First box in format: [x1,y1,x2,y2,object_class,probability]
-       * @param box2 Second box in format: [x1,y1,x2,y2,object_class,probability]
-       * @returns Intersection over union ratio as a float number
-       */
-      function iou(box1,box2) {
-          return intersection(box1,box2)/union(box1,box2);
-      }
-
-      /**
-       * Function calculates union area of two boxes.
-       *     :param box1: First box in format [x1,y1,x2,y2,object_class,probability]
-       *     :param box2: Second box in format [x1,y1,x2,y2,object_class,probability]
-       *     :return: Area of the boxes union as a float number
-       * @param box1 First box in format [x1,y1,x2,y2,object_class,probability]
-       * @param box2 Second box in format [x1,y1,x2,y2,object_class,probability]
-       * @returns Area of the boxes union as a float number
-       */
-      function union(box1,box2) {
-          const [box1_x1,box1_y1,box1_x2,box1_y2] = box1;
-          const [box2_x1,box2_y1,box2_x2,box2_y2] = box2;
-          const box1_area = (box1_x2-box1_x1)*(box1_y2-box1_y1)
-          const box2_area = (box2_x2-box2_x1)*(box2_y2-box2_y1)
-          return box1_area + box2_area - intersection(box1,box2)
-      }
-
-      /**
-       * Function calculates intersection area of two boxes
-       * @param box1 First box in format [x1,y1,x2,y2,object_class,probability]
-       * @param box2 Second box in format [x1,y1,x2,y2,object_class,probability]
-       * @returns Area of intersection of the boxes as a float number
-       */
-      function intersection(box1,box2) {
-          const [box1_x1,box1_y1,box1_x2,box1_y2] = box1;
-          const [box2_x1,box2_y1,box2_x2,box2_y2] = box2;
-          const x1 = Math.max(box1_x1,box2_x1);
-          const y1 = Math.max(box1_y1,box2_y1);
-          const x2 = Math.min(box1_x2,box2_x2);
-          const y2 = Math.min(box1_y2,box2_y2);
-          return (x2-x1)*(y2-y1)
-      }
-
-      /**
-       * Array of YOLOv8 class labels
-       */
-      const yolo_classes = ["DigitizationArtefactZone", "DropCapitalZone", "GraphicZone", "GraphicZone-Legend", "GraphicZone-Maths", "MainZone-Entry", "MainZone-Head", "MainZone-Lg", "MainZone-Other", "MainZone-P", "MainZone-Sp", "MarginTextZone-Notes", "NumberingZone", "PageTitleZone", "PageTitleZone-Index", "RunningTitleZone", "StampZone", "TableZone", "TableZone-Legend"];
-
-      // Javascript
-
-      async function OCRize(img) {
-        const worker = await Tesseract.createWorker('fra+osd');
-        const {data : { lines }} = await worker.recognize(
-          img//,
-          // Works badly...
-          //{tessedit_pageseg_mode: '1'}
-          );
-        await worker.terminate();
-        return lines;
-      };
     </script>
 </body>
 </html>
