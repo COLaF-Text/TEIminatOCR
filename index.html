@@ -3,8 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <title>TEIminatOCR, an image to TEI full javascript application</title>
+    <script src='http://lovasoa.github.io/tidy-html5/tidy.js'></script>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
+    <script src="https://cdn.jsdelivr.net/npm/xml-beautify@1.2.3/dist/XmlBeautify.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <!-- and it's easy to individually load additional languages -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/xml.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     <style>
       canvas {
@@ -29,7 +35,7 @@
               <li>
                 Clérice, T. (2023). You Actually Look Twice At it (YALTAi): using an object detection approach instead of region segmentation within the Kraken engine. [Preprint] <a target="_blank" href="https://enc.hal.science/hal-03723208v2">⟨hal-03723208v2⟩</a>
               </li>
-              <li>Pinche, A., Gabay, S., & Camps, J. B. (2022). SegmOnto: Vocabulaire contrôlé pour décrire les manuscrits et les imprimés. In Segmenter et annoter les images: déconstruire pour reconstruire. <i>1st International Workshop on Computational Paleography (IWCP@ICDAR 2021)</i>, Lausanne, Switzerland. <a href="https://hal.science/hal-03336528">⟨hal-03336528⟩</a></li>
+              <li>Pinche, A., Gabay, S., Camps, J. B., & Jahan, C. (2022). SegmOnto: Vocabulaire contrôlé pour décrire les manuscrits et les imprimés. In Segmenter et annoter les images: déconstruire pour reconstruire. <i>1st International Workshop on Computational Paleography (IWCP@ICDAR 2021)</i>, Lausanne, Switzerland. <a href="https://hal.science/hal-03336528">⟨hal-03336528⟩</a></li>
               <li>R. Smith. (2007). An Overview of the Tesseract OCR Engine. <i>Ninth International Conference on Document Analysis and Recognition (ICDAR 2007)</i>,, vol. 2, pp. 629–633. <a href="https://doi.org/10.1109/ICDAR.2007.4376991">10.1109/ICDAR.2007.4376991</a>.</li>
               <li>
                 Wu, J. (2023). TesseractJS (Version 5.0.2) [Computer software]. <a href="https://github.com/naptha/tesseract.js">https://github.com/naptha/tesseract.js</a>
@@ -86,7 +92,7 @@
           <canvas id="canva"></canvas>
         </div>
         <div class="col-md-5">
-          <textarea id="te" style="min-height:400px; width: 100%;"></textarea>
+          <pre id="te" style="min-height:400px; width: 100%;"></pre>
         </div>
       </div>
     </div>
@@ -102,12 +108,16 @@
                 radio_name,
                 textarea_id,
                 submit_id,
-                canva_id
+                canva_id,
+                median_word_space_ratio,
+                min_ocr_confidence
         ) {
           this.img_width = img_width || 640;
           this.img_height = img_height || 640;
-          this.yolo_min_prob = yolo_min_prob || 0.2;
-          this.yolo_overlap = yolo_overlap || 0.3;
+          this.yolo_min_prob = yolo_min_prob || 0.3;
+          this.yolo_overlap = yolo_overlap || 0.4;
+          this.median_word_space_ratio = median_word_space_ratio || 2;
+          this.min_ocr_confidence = min_ocr_confidence || 10;
 
           // Depends on your model (1, 23, 13125) is the output shape for us with 800*800
           this.yolo_model_out_size = yolo_model_out_size || 8400;
@@ -117,13 +127,40 @@
           this.button = document.getElementById(submit_id || "button");
           this.canva = document.getElementById(canva_id || "canva");
           this.yolo_classes = [
-                  "DigitizationArtefactZone", "DropCapitalZone", "GraphicZone",
-            "GraphicZone-Legend", "GraphicZone-Maths", "MainZone-Entry",
-            "MainZone-Head", "MainZone-Lg", "MainZone-Other", "MainZone-P",
-            "MainZone-Sp", "MarginTextZone-Notes", "NumberingZone", "PageTitleZone",
-            "PageTitleZone-Index", "RunningTitleZone", "StampZone", "TableZone", "TableZone-Legend"
+             "DigitizationArtefactZone", "DropCapitalZone", "GraphicZone", "GraphicZone-Legend",
+            "GraphicZone-Maths", "MainZone-Entry", "MainZone-Head", "MainZone-Lg",
+            "MainZone-Other", "MainZone-P", "MainZone-Sp", "Mainzone-Other",
+            "MarginTextZone-Notes", "NumberingZone", "PageTitleZone", "PageTitleZone-Index",
+            "RunningTitleZone", "StampZone", "TableZone", "TableZone-Legend"
           ];
           this.setup_button(this.button);
+        }
+
+        formatXml(xml) {
+            const PADDING = ' '.repeat(2); // set desired indent size here
+            const reg = /(>)(<)(\/*)/g;
+            let pad = 0;
+
+            xml = xml.replace(reg, '$1\n$2$3');
+
+            return xml.split('\n').map((node, index) => {
+                let indent = 0;
+                if (node.match(/.+<\/\w[^>]*>$/)) {
+                    indent = 0;
+                } else if (node.match(/^<\/\w/) && pad > 0) {
+                    pad -= 1;
+                } else if (node.match(/^<\w.*\/>/)) {
+                    indent = 0;
+                } else if (node.match(/^<\w[^>]*[^\/]>.*$/)) {
+                    indent = 1;
+                } else {
+                    indent = 0;
+                }
+
+                pad += indent;
+
+                return PADDING.repeat(pad - indent) + node;
+            }).join('\n');
         }
 
         /**
@@ -147,7 +184,12 @@
             }
 
             const out = await this.detect_objects_on_image(val);
-            this.textarea.value = out.xml.outerHTML.split("<lb>").join("<lb />").replace(/<\/lb>/g, '');
+            this.textarea.innerHTML = hljs.highlight(
+              this.formatXml( // Little hack that does not work
+                  "<?xml version=\"1.0\" encoding=\"utf-8\"?>"+out.xml.outerHTML
+              ).split("<lb>").join("<lb/>").replace(/<\/lb>/g, ''),
+              { language: 'xml' }
+            ).value;
             this.draw_image_and_boxes(
               val,
               out.boxes,
@@ -187,6 +229,7 @@
 
             if ((typeof file === 'string' || file instanceof String) && file.startsWith("http")) {
                 img.crossOrigin = 'Anonymous';
+                img.crossDomain = true;
                 img.src = file;
             } else {
                 img.src = URL.createObjectURL(file);
@@ -207,8 +250,8 @@
                     ctx.fillText(label, x1 * scale, (y1 + 18) * scale);
                 });
                 lines.forEach(([x1, y1, x2, y2]) => {
-                    ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
                     ctx.strokeStyle = "#000000";
+                    ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
                 });
             }
         }
@@ -225,7 +268,7 @@
         async detect_objects_on_image(buf) {
           const [img, input, img_width, img_height] = await this.prepare_input(buf);
           const output = await this.run_model(input);
-          const lines = await this.OCRize(img);
+          const lines = (await this.OCRize(img)).map((line) => this.reprocess_lines(line)).flat();
           const boxes = this.process_output(output, img_width, img_height);
           boxes.sort((a, b) => {
             // Compare the second floating-point element (index 1) first
@@ -243,18 +286,16 @@
 
           // Create the nodes based on tags and fill them with lines
           for (const zone of Object.values(dispatched)) {
-            let xmlNode;
+            let xpath = "ab";
             if (zone.isOriginal) {
-              xmlNode = document.createElement(this.getTag(zone.metadata[4]));
-            } else {
-              xmlNode = document.createElement("ab");
+              xpath = zone.metadata[4];
             }
-            for (var i = 0; i < zone.elements.length; i++) {
-              xmlNode.innerHTML += "<lb/> " + zone.elements[i].text.trim() + "\n";
+            let zoneObj = this.getTag(xpath);
+            for (let i = 0; i < zone.elements.length; i++) {
+              zoneObj.elem.innerHTML += "<lb/>" + zone.elements[i].text.trim() + "\r\n";
             }
-            xml.appendChild(xmlNode);
+            xml.appendChild(zoneObj.doc.documentElement);
           }
-
           return {
             "boxes": boxes,
             "xml": xml,
@@ -272,31 +313,61 @@
           return keys[keys.length - 1];
         }
 
+        xpath_to_xml(str) {
+          const tags = str.split("/");
+          const local_document = document.implementation.createDocument(null, "", null);
+          let last = local_document;
+          for (const tag of tags) {
+            const [nodeName, ...attributes] = tag.split(/\s/);
+            const element = local_document.createElement(nodeName);
+            last.appendChild(element);
+            if (attributes.length > 0) {
+              for (const attributePair of attributes) {
+                const [attrName, attrValue] = attributePair.split("=");
+                if (attrName && attrValue) {
+                  element.setAttribute(attrName, attrValue.replace(/["']/g, ''));
+                }
+              }
+            }
+            last = element;
+          }
+          return {doc: local_document, elem: last}
+          //console.log(new XMLSerializer().serializeToString(local_document));
+        }
+
         /**
          * Get the type of node back from the zone
          * @param zone Type of the YOLO class
-         * @returns {string} XML Tag name
+         * @returns {{doc: Document, elem: Node}} XML Document
          */
         getTag(zone) {
-          if (zone.startsWith("MainZone")) {
-            if (zone.endsWith("-P")) {
-              return "p";
-            } else if (zone.endsWith("-Head")) {
-              return "head";
-            } else if (zone.endsWith("-Lg")) {
-              return "lg";
-            } else if (zone.endsWith("-Sp")) {
-              return "sp";
-            } else if (zone.endsWith("-Entry")) {
-              return "entryFree";
-            } else if (zone.endsWith("-Other")) {
-              return "ab";
-            }
-          } else if (zone.startsWith("MarginTextZone")) {
-            return "note";
-          } else {
-            return "ab";
+          // Create a new DOMParser
+          const mapping = {
+            "DigitalArtefactZone": `damage`,
+            "DropCapitalZone": `hi rend="dropcapital"`,
+            "GraphicZone": `figure`,
+            "GraphicZone-Legend": `figure/head`,
+            "GraphicZone-Maths": `figure type="maths"`,
+            "MainZone-Entry": `div type="entry"/p`,
+            "MainZone-Head": `div/head`,
+            "MainZone-Lg": `lg`,
+            "MainZone-Other": `div type="other"/p`,
+            "MainZone-P": `p`,
+            "Mainzone-Sp": `sp/p`,
+            "MarginTextZone-Notes": `note`,
+            "NumberingZone": `fw type="Numbering"`,
+            "PageTitleZone": `div type="pagetitle"/p`,
+            "PageTitleZone-Index": `div type="index"`,
+            "RunnningTitleZone": `fw type="RunningTitle"`,
+            "StampZone": `figure type="stamp"`,
+            "TableZone": `figure type="table"`,
+            "TableZone-Legend": `figure type="table"/head`
           }
+          let tag = "ab";
+          if (zone in mapping) {
+            tag = mapping[zone];
+          }
+          return this.xpath_to_xml(tag)
         }
 
         /**
@@ -321,6 +392,7 @@
                   canvas.width = this.img_width;
                   canvas.height = this.img_height;
                   const context = canvas.getContext("2d");
+                  context.imageSmoothingEnabled = false;
                   context.drawImage(img, 0, 0, this.img_width, this.img_height);
                   const imgData = context.getImageData(0, 0, this.img_width, this.img_height);
                   const pixels = imgData.data;
@@ -356,13 +428,13 @@
          *
          * @param {Image} img - The image to be processed for text extraction.
          * @param {string} language - The language for OCR
-         * @returns {Array} An array of line objects containing recognized text lines.
+         * @returns {Array[{bbox: {}, words: Array[{bbox:{}, text: String}]}]} An array of line objects containing recognized text lines.
          * @throws {Error} If an error occurs during the OCR process.
          */
         async OCRize(img, language) {
           try {
             // Create a Tesseract worker with the specified language model.
-            const worker = await Tesseract.createWorker(language || "fra+osd");
+            const worker = await Tesseract.createWorker(language || "fra");
 
             // Recognize text lines in the provided image.
             const { data: { lines } } = await worker.recognize(img);
@@ -375,6 +447,105 @@
             // Handle and throw any errors that occur during the OCR process.
             throw new Error(`OCR process failed: ${error.message}`);
           }
+        }
+
+        /**
+         * Calculate the median of an array of numbers.
+         *
+         * @param {number[]} numbers - An array of numbers.
+         * @returns {number} The median of the numbers.
+         */
+        median(numbers) {
+          const sorted = [...numbers].sort();
+          const middle = Math.floor(sorted.length / 2);
+
+          if (sorted.length % 2 === 0) {
+            return (sorted[middle - 1] + sorted[middle]) / 2;
+          } else {
+            return sorted[middle];
+          }
+        }
+
+        /**
+         * Processes an object with a `.bbox` property and a `.words` property,
+         * splitting and dispatching words objects into new objects when spaces are too large.
+         *
+         * @param {Object} inputObject - The input object to be processed.
+         * @returns {Array[{words, bbox}]} An array of objects, each containing a `.bbox` property and an array of `.words`.
+         */
+        reprocess_lines(inputObject) {
+          // Extract the `.bbox` and `.words` properties from the input object.
+          const bbox = inputObject.bbox;
+          const words = inputObject.words.filter((word) => word.confidence > this.min_ocr_confidence);
+
+          // Initialize an array to store the processed objects.
+          const result = [];
+
+          // Initialize variables to track the current line of words and its bounding box.
+          let currentLine = [];
+          let currentLineBBox = { ...bbox };
+
+          // Initialize an array to store the space values between words on the horizontal axis.
+          const horizontalSpaces = [];
+          for (let wordIndex = 1; wordIndex < words.length; wordIndex++) {
+            horizontalSpaces.push(words[wordIndex].bbox.x0 - words[wordIndex-1].bbox.x1);
+          }
+
+          const medianSpace = this.median(horizontalSpaces);
+
+          // Iterate through the words in the input object.
+          for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
+            const word = words[wordIndex],
+                  { bbox: wordBBox, text } = word;
+
+            // Calculate the space between the current word and the end of the current line on the horizontal axis.
+            let spaceBetweenWords = 0;
+            if (wordIndex !== 0) {
+              spaceBetweenWords = words[wordIndex].bbox.x0 - words[wordIndex-1].bbox.x1;
+            }
+
+            if (spaceBetweenWords > (medianSpace * this.median_word_space_ratio) || spaceBetweenWords > 0.25 * (bbox.x2-bbox.x1)) {
+              // The space is too large; start a new line.
+              if (currentLine.length > 0) {
+                // Push the current line with its bounding box to the result array.
+                result.push({
+                  bbox: currentLineBBox,
+                  words: currentLine,
+                });
+              }
+
+              // Start a new line with the current word.
+              currentLine = [word];
+              currentLineBBox = { ...wordBBox };
+            } else {
+              // Add the word to the current line.
+              currentLine.push(word);
+              currentLineBBox.x1 = wordBBox.x1; // Update the end of the current line.
+              currentLineBBox.y1 = wordBBox.y1;
+            }
+          }
+
+          // If there are remaining words in the last line, add it to the result.
+          if (currentLine.length > 0) {
+            result.push({
+              bbox: currentLineBBox,
+              words: currentLine,
+            });
+          }
+
+          // Return the processed objects.
+          return result.map(
+                  (line) => ({
+                    "bbox": {
+                      "x0": line.words[0].bbox.x0,
+                      "y0": line.words[0].bbox.y0,
+                      "x1": line.bbox.x1,
+                      "y1": line.bbox.y1
+                    },
+                    "words": line.words,
+                    "text": line.words.map(obj => obj.text).join(" ")
+                  })
+          )
         }
 
         /**
@@ -460,7 +631,7 @@
             const y1 = Math.max(box1_y1,box2_y1);
             const x2 = Math.min(box1_x2,box2_x2);
             const y2 = Math.min(box1_y2,box2_y2);
-            return (x2-x1)*(y2-y1)
+            return Math.max(0, x2-x1)*Math.max(0, y2-y1)
         }
 
         /**
@@ -483,22 +654,22 @@
           const dispatchDict = {};
 
           for (const currentLine of lineList) {
-              let maxIou = 0;
+              let maxIntersect = 0;
               let targetBbox = null
               let dispatchDictKey = null;
               let currentLineBbox = this.map_bbox_to_array(currentLine);
 
               // Iterate over the zones and find which zone has the max IOU of all
               for (const currentZone of zoneList) {
-                  const iou = this.iou(currentLineBbox, currentZone.slice(0, 4));
-                  if (iou > maxIou) {
-                      maxIou = iou;
+                  const intersect = this.intersection(currentLineBbox, currentZone.slice(0, 4));
+                  if (intersect > maxIntersect) {
+                      maxIntersect = intersect;
                       targetBbox = currentZone;
                       dispatchDictKey = currentZone.slice(0, 4);
                   }
               }
 
-              if (maxIou > 0) {
+              if (maxIntersect > 0) {
                   // Add the element to the target bbox in the dictionary.
                   if (!dispatchDict[dispatchDictKey]) {
                       dispatchDict[dispatchDictKey] = {
@@ -525,8 +696,7 @@
           return dispatchDict;
         }
       }
-      const runner = new Teiminatocr();
-
+      const runner = new Teiminatocr(800, 800, .3, .5, 13125);
     </script>
 </body>
 </html>
