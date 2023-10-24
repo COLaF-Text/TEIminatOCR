@@ -106,39 +106,56 @@
 
     <script>
       class Teiminatocr {
-        constructor(
-                img_width,
-                img_height,
-                yolo_min_prob,
-                yolo_overlap,
-                yolo_model_out_size,
-                radio_name,
-                textarea_id,
-                submit_id,
-                canva_id,
-                median_word_space_ratio,
-                min_ocr_confidence
-        ) {
-          this.img_width = img_width || 640;
-          this.img_height = img_height || 640;
-          this.yolo_min_prob = yolo_min_prob || 0.3;
-          this.yolo_overlap = yolo_overlap || 0.4;
-          this.median_word_space_ratio = median_word_space_ratio || 2;
-          this.min_ocr_confidence = min_ocr_confidence || 10;
+        constructor(config) {
+          const {
+            img_width = 640,
+            img_height = 640,
+            yolo_min_prob = 0.3,
+            yolo_overlap = 0.4,
+            median_word_space_ratio = 2,
+            min_ocr_confidence = 10,
+            yolo_model_out_size = 8400,
+            radio_name = "use",
+            textarea_id = "te",
+            submit_id = "button",
+            canva_id = "canva",
+          } = config;
+          this.img_width = img_width;
+          this.img_height = img_height;
+          this.yolo_min_prob = yolo_min_prob;
+          this.yolo_overlap = yolo_overlap;
+          this.median_word_space_ratio = median_word_space_ratio;
+          this.min_ocr_confidence = min_ocr_confidence;
 
           // Depends on your model (1, 23, 13125) is the output shape for us with 800*800
-          this.yolo_model_out_size = yolo_model_out_size || 8400;
+          this.yolo_model_out_size = yolo_model_out_size;
 
           this.radio_name = radio_name || "use";
           this.textarea = document.getElementById(textarea_id || "te");
           this.button = document.getElementById(submit_id || "button");
           this.canva = document.getElementById(canva_id || "canva");
           this.yolo_classes = [
-             "DigitizationArtefactZone", "DropCapitalZone", "GraphicZone", "GraphicZone-Legend",
-            "GraphicZone-Maths", "MainZone-Entry", "MainZone-Head", "MainZone-Lg",
-            "MainZone-Other", "MainZone-P", "MainZone-Sp", "Mainzone-Other",
-            "MarginTextZone-Notes", "NumberingZone", "PageTitleZone", "PageTitleZone-Index",
-            "RunningTitleZone", "StampZone", "TableZone", "TableZone-Legend"
+            "DigitizationArtefactZone",
+            "DropCapitalZone",
+            "GraphicZone",
+            "GraphicZone-Legend",
+            "GraphicZone-Maths",
+            "MainZone-Entry",
+            "MainZone-Form",
+            "MainZone-Head",
+            "MainZone-Lg",
+            "MainZone-List",
+            "MainZone-Other",
+            "MainZone-P",
+            "MainZone-Sp",
+            "MarginTextZone-Notes",
+            "NumberingZone",
+            "PageTitleZone",
+            "PageTitleZone-Index",
+            "RunningTitleZone",
+            "StampZone",
+            "TableZone",
+            "TableZone-Legend"
           ];
           this.setup_button(this.button);
         }
@@ -758,7 +775,13 @@
           return dispatchDict;
         }
       }
-      const runner = new Teiminatocr(640, 640, .3, .1, 8400);
+      const runner = new Teiminatocr({
+        img_width: 640,
+        img_height: 640,
+        yolo_min_prob: .4,
+        yolo_overlap: .2,
+        yolo_model_out_size: 8400
+      });
       const tei_button = document.getElementById("download-tei");
       tei_button.addEventListener("click", async(event) => {
         event.preventDefault();
